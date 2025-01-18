@@ -1,0 +1,92 @@
+#!/bin/bash
+
+#This scripts assumes you have the following set in your TrunkRecorder Config File: 
+#		audioArchive: true, 
+#		compressWav: true, 
+#		callLog: true
+#This script DELETES the audio upon successful upload. Adjust accordingly if you prefer to have the script to a new directory instead. 
+#if you do not delete or move files, it will continue to reupload the same audio repeatedly. 
+
+# Configuration
+OPENMHZ_SHORT_NAME="YOUR_OPENMHZ_SHORTNAME" #openMhz short name
+API_KEY="YOUR_API_KEY" #openMhz API Key
+WATCH_DIR="YOUR_RECORDING_DIRECTORY_HERE" #script only works for one system at a time. Choose the directory for just that system.
+DELAY=300 #Time delay (in seconds) before files are uploaded
+
+
+# Logging
+log_message() {
+  local level="$1"  # Log level: INFO, ERROR, etc.
+  local file="$2"   # File name or context
+  local message="$3"  # Message to log
+  printf "%-28s %-11s %-20s %-35s\n" "$(date +'%Y-%m-%d %H:%M:%S.%3N')" "$level" "$message" "$file"
+}
+
+# Processing
+process_file() {
+  m4a_file="$1"
+  base_name="${m4a_file%.m4a}"
+  call="$base_name.m4a"
+  call_json="${base_name}.json"
+  file_name=$(basename "$m4a_file")
+  log_message "[INFO]" "$file_name" "Ready for Upload"
+
+  # Upload to OpenMHZ
+  OPENMHZ_URL="https://api.openmhz.com/$OPENMHZ_SHORT_NAME/upload"
+  log_message "[INFO]" "$file_name" "Uploading"
+
+  # Extract metadata from JSON
+  start_time=$(jq -r '.start_time' "$call_json")
+  stop_time=$(jq -r '.stop_time' "$call_json")
+  call_length_int=$(jq -r '.call_length' "$call_json")
+  freq=$(jq -r '.freq' "$call_json")
+  talkgroup=$(jq -r '.talkgroup' "$call_json")
+
+  # Make the upload request
+  curl -sS -m 10 --request POST \
+       --url "$OPENMHZ_URL" \
+       --header 'Content-Type: multipart/form-data' \
+       --header 'User-Agent: TrunkRecorder1.0' \
+       --form api_key="$API_KEY" \
+       --form call=@"$call" \
+       --form start_time="$start_time" \
+       --form stop_time="$stop_time" \
+       --form call_length="$call_length_int" \
+       --form freq="$freq" \
+       --form talkgroup_num="$talkgroup" \
+       --form emergency=0 \
+       --form "source_list=$(jq -c '.srcList' "$call_json")" \
+       --form "freq_list=$(jq -c '.freqList' "$call_json")"
+
+  # Check if the curl command was successful
+  if [ $? -eq 0 ]; then
+    log_message "[INFO]" "$file_name" "Success"
+    
+    # Remove the files after successful upload
+    rm -f "$m4a_file"
+    rm -f "$call_json"
+  else
+    log_message "[ERROR]" "$file_name" "Upload failed"
+  fi
+}
+
+# Main loop
+while true; do
+  # Find and sort files by start time extracted from file name
+  find "$WATCH_DIR" -type f -name "*.m4a" | sort -t'-' -k2,2n | while read -r m4a_file; do
+    # Extract start time from file name
+    start_time=$(basename "$m4a_file" | cut -d'-' -f2 | cut -d'_' -f1)
+
+    # Check if the file's start time meets the age threshold
+    if [ $(( $(date +%s) - start_time )) -gt "$DELAY" ]; then
+      # Upload the file if it passes the threshold
+      process_file "$m4a_file"
+      
+      # Wait before uploading the next file.
+      sleep 3
+    fi
+  done
+
+  # Once all eligible files are uploaded wait _ seconds before checking for new files. 
+  sleep 5
+done
