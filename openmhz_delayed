@@ -1,111 +1,131 @@
 #!/bin/bash
 
-# TrunkRecorder config requirements:
-#   audioArchive: true,
-#   compressWav: true,
-#   callLog: true
+# Configuration file path
+CONFIG_FILE="/home/trunkrecorder/SDR/trunk-build/openmhz_delayed_config.json"
 
-# Configuration
-SHORT_NAME="" # openMhz short name
-OPENMHZ_KEY="" # openMhz API Key
-WATCH_DIR="" # script only works for one system at a time. Choose the directory for just that system.
-UPLOADED_DIR="${WATCH_DIR}_uploaded" # Directory for uploaded files
-AGE_THRESHOLD=300 # Time delay (in seconds) before files are uploaded
-
-# Ensure the uploaded directory exists
-mkdir -p "$UPLOADED_DIR"
-
-# Logging
+# Logging function
 log_message() {
-  local level="$1"  # Log level: INFO, ERROR, etc.
-  local file="$2"   # File name or context
-  local message="$3"  # Message to log
-  printf "%-28s %-11s %-20s %-35s\n" "$(date +'%Y-%m-%d %H:%M:%S.%3N')" "$level" "$message" "$file"
+  local level="$1"
+  local system_name="$2"
+  local file="$3"
+  local message="$4"
+  printf "%-28s %-11s %-20s %-20s %-35s\n" "$(date +'%Y-%m-%d %H:%M:%S.%3N')" "$level" "$system_name" "$message" "$file"
 }
 
-# Processing
-process_file() {
-  m4a_file="$1"
-  base_name="${m4a_file%.m4a}"
-  call="$base_name.m4a"
-  call_json="${base_name}.json"
-  call_wav="${base_name}.wav"
-  file_name=$(basename "$m4a_file")
-  log_message "(info)" "$file_name" "Ready for Upload"
+# Check if a talkgroup should be skipped
+should_skip_talkgroup() {
+  local talkgroup="$1"
+  local talkgroups_to_skip="$2"
+  IFS=',' read -ra SKIP_ARRAY <<< "$talkgroups_to_skip"
+  for tg in "${SKIP_ARRAY[@]}"; do
+    if [[ "$talkgroup" == "$tg" ]]; then
+      return 0 # Skip upload
+    fi
+  done
+  return 1 # Proceed with upload
+}
 
-  # Upload to OpenMHZ
-  OPENMHZ_URL="https://api.openmhz.com/$SHORT_NAME/upload"
-  log_message "(info)" "$file_name" "Uploading"
+# Processing function
+process_file() {
+  local m4a_file="$1"
+  local system_config="$2"
+  local base_name="${m4a_file%.m4a}"
+  local call_json="${base_name}.json"
+  local call_wav="${base_name}.wav"
+  local file_name=$(basename "$m4a_file")
+  local system_name=$(jq -r '.systemName' <<< "$system_config")
+  local short_name=$(jq -r '.shortName // ""' <<< "$system_config")
+  local openmhz_key=$(jq -r '.openmhzKey' <<< "$system_config")
+  local upload_delay=$(jq -r '.uploadDelay' <<< "$system_config")
+  local talkgroups_to_skip=$(jq -r '.talkgroupsToSkip' <<< "$system_config")
+  local global_watch_dir=$(jq -r '.globalWatchDir' "$CONFIG_FILE")
+  local watch_dir=$(jq -r '.watchDir // ""' <<< "$system_config")
+  
+  # Default watchDir to [globalWatchDir]/[systemName] if not defined
+  if [[ -z "$watch_dir" || "$watch_dir" == "null" ]]; then
+    watch_dir="${global_watch_dir}/${system_name}"
+  fi
+
+  local uploaded_dir="${watch_dir}_uploaded"
+
+  #log_message "(info)" "$system_name" "$file_name" "Ready for Upload"
 
   # Extract metadata from JSON
-  start_time=$(jq -r '.start_time' "$call_json")
-  stop_time=$(jq -r '.stop_time' "$call_json")
-  call_length_int=$(jq -r '.call_length' "$call_json")
-  freq=$(jq -r '.freq' "$call_json")
-  talkgroup=$(jq -r '.talkgroup' "$call_json")
-  patched_talkgroups=$(jq -c '.patched_talkgroups' "$call_json")
-
-  # Make the upload request with error handling
-  response=$(curl -sS -m 10 --write-out "%{http_code}" --output /tmp/api_response.log --request POST \
-    --url "$OPENMHZ_URL" \
-    --header 'Content-Type: multipart/form-data' \
-    --header 'User-Agent: TrunkRecorder1.0' \
-    --form api_key="$OPENMHZ_KEY" \
-    --form call=@"$call" \
-    --form start_time="$start_time" \
-    --form stop_time="$stop_time" \
-    --form call_length="$call_length_int" \
-    --form freq="$freq" \
-    --form talkgroup_num="$talkgroup" \
-    --form emergency=0 \
-    --form "source_list=$(jq -c '.srcList' "$call_json")" \
-    --form "freq_list=$(jq -c '.freqList' "$call_json")" \
-    --form "patched_talkgroups=$patched_talkgroups"
-  )
-
-  # Check the response code
-  if [[ "$response" -eq 200 ]]; then
-    log_message "(info)" "$file_name" "Upload Success"
-
-    # Create year, month, and day directories
-    year_dir="$UPLOADED_DIR/$(date +%Y)"
-    month_dir="$year_dir/$(date +%-m)"
-    day_dir="$month_dir/$(date +%-d)"
-
-    mkdir -p "$day_dir"
-
-    # Move files to the uploaded directory after successful upload
-    mv -f "$m4a_file" "$day_dir/"
-    log_message "(info)" "$file_name" "Audio Moved"
-
-    mv -f "$call_json" "$day_dir/"
-    log_message "(info)" "$file_name" "JSON Moved"
-
-    rm -f "$call_wav"
-    log_message "(info)" "$file_name" "WAV Deleted"
+  local talkgroup=$(jq -r '.talkgroup' "$call_json")
+  
+  if should_skip_talkgroup "$talkgroup" "$talkgroups_to_skip"; then
+    log_message "(info)" "$system_name" "$file_name" "**SKIPPED**"
   else
-    log_message "(error)" "$file_name" "Upload failed with response code: $response"
-    log_message "(error)" "$file_name" "Response: $(cat /tmp/api_response.log)"
+    # Use shortName for upload if defined, otherwise use systemName
+    local upload_short_name="${short_name:-$system_name}"
+    local OPENMHZ_URL="https://api.openmhz.com/$upload_short_name/upload"
+    log_message "(info)" "$system_name" "$file_name" "Uploading"
+    
+    # Capture the full HTML response from the API
+    response=$(curl -sS -m 10 --write-out "%{http_code}" --output /tmp/api_response.log --request POST \
+      --url "$OPENMHZ_URL" \
+      --header 'Content-Type: multipart/form-data' \
+      --header 'User-Agent: TrunkRecorder1.0' \
+      --form api_key="$openmhz_key" \
+      --form call=@"$m4a_file" \
+      --form start_time="$(jq -r '.start_time' "$call_json")" \
+      --form stop_time="$(jq -r '.stop_time' "$call_json")" \
+      --form call_length="$(jq -r '.call_length' "$call_json")" \
+      --form freq="$(jq -r '.freq' "$call_json")" \
+      --form talkgroup_num="$talkgroup" \
+      --form emergency=0 \
+      --form "source_list=$(jq -c '.srcList' "$call_json")" \
+      --form "freq_list=$(jq -c '.freqList' "$call_json")" \
+      --form "patched_talkgroups=$(jq -c '.patched_talkgroups' "$call_json")"
+    )
+
+    if [[ "$response" -eq 200 ]]; then
+      log_message "(info)" "$system_name" "$file_name" "Success"
+      #log_message "(info)" "$system_name" "$file_name" "API Response: $(cat /tmp/api_response.log)"
+    else
+      log_message "(error)" "$system_name" "$file_name" "Upload failed with response code: $response"
+      #log_message "(error)" "$system_name" "$file_name" "API Response: $(cat /tmp/api_response.log)"
+      return
+    fi
   fi
+
+  # Move files to the uploaded directory while maintaining the original folder structure
+  local relative_path="${m4a_file#$watch_dir}"
+  local destination_path="${uploaded_dir}${relative_path}"
+  local destination_dir=$(dirname "$destination_path")
+
+  mkdir -p "$destination_dir"
+  mv -f "$m4a_file" "$destination_path"
+  #log_message "(info)" "$system_name" "$file_name" "Audio Moved"
+  mv -f "$call_json" "${destination_path%.m4a}.json"
+  #log_message "(info)" "$system_name" "$file_name" "JSON Moved"
+  rm -f "$call_wav"
+  #log_message "(info)" "$system_name" "$file_name" "WAV Deleted"
 }
 
 # Main loop
 while true; do
-  # Find and sort files by start time extracted from file name
-  find "$WATCH_DIR" -type f -name "*.m4a" | sort -t'-' -k2,2n | while read -r m4a_file; do
-    # Extract start time from file name
-    start_time=$(basename "$m4a_file" | cut -d'-' -f2 | cut -d'_' -f1)
-
-    # Check if the file's start time meets the age threshold
-    if [ $(( $(date +%s) - start_time )) -gt "$AGE_THRESHOLD" ]; then
-      # Upload the file if it passes the threshold
-      process_file "$m4a_file"
-      
-      # Wait before uploading the next file.
-      sleep 1
+  # Read the configuration file
+  systems=$(jq -c '.systems[]' "$CONFIG_FILE")
+  
+  for system_config in $systems; do
+    system_name=$(jq -r '.systemName' <<< "$system_config")
+    global_watch_dir=$(jq -r '.globalWatchDir' "$CONFIG_FILE")
+    watch_dir=$(jq -r '.watchDir // ""' <<< "$system_config")
+    upload_delay=$(jq -r '.uploadDelay' <<< "$system_config")
+    
+    # Default watchDir to [globalWatchDir]/[systemName] if not defined
+    if [[ -z "$watch_dir" || "$watch_dir" == "null" ]]; then
+      watch_dir="${global_watch_dir}/${system_name}"
     fi
-  done
 
-  # Once all eligible files are uploaded, wait 5 seconds before checking for new files.
-  sleep 5
+    find "$watch_dir" -type f -name "*.m4a" | sort -t'-' -k2,2n | while read -r m4a_file; do
+      start_time=$(basename "$m4a_file" | cut -d'-' -f2 | cut -d'_' -f1)
+      if [ $(( $(date +%s) - start_time )) -gt "$upload_delay" ]; then
+        process_file "$m4a_file" "$system_config"
+        sleep 1
+      fi
+    done
+  done
+  #sleep 3
 done
