@@ -1,0 +1,31 @@
+{
+  "globalWatchDir": "/home/trunkrecorder/SDR/Recordings",
+  "systems": [
+    {
+      "systemName": "cachep25",
+      "openmhzKey": "",
+      "uploadDelay": 300,
+      "talkgroupsToSkip": "1546"
+    },
+    {
+      "systemName": "cacheham",
+      "openmhzKey": "",
+      "uploadDelay": 5,
+      "talkgroupsToSkip": ""
+    },
+    {
+      "systemName": "cacheham2",
+      "shortName": "cacheham",
+      "openmhzKey": "",
+      "uploadDelay": 5,
+      "talkgroupsToSkip": ""
+    },
+    {
+      "systemName": "cachegmrs",
+      "shortName": "cacheham",
+      "openmhzKey": "",
+      "uploadDelay": 5,
+      "talkgroupsToSkip": ""
+    }
+  ]
+}
