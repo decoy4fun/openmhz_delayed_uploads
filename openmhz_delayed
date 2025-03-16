@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration file path
-CONFIG_FILE="/home/trunkrecorder/SDR/trunk-build/openmhz_delayed_config.json"
+CONFIG_FILE="/home/ubuntu/Automations/OpenMhz/openmhz_delayed_config.json"
 
 # Logging function
 log_message() {
@@ -37,32 +37,27 @@ process_file() {
   local short_name=$(jq -r '.shortName // ""' <<< "$system_config")
   local openmhz_key=$(jq -r '.openmhzKey' <<< "$system_config")
   local upload_delay=$(jq -r '.uploadDelay' <<< "$system_config")
+  local min_file_age=$(jq -r '.minFileAge // 10' <<< "$system_config")
   local talkgroups_to_skip=$(jq -r '.talkgroupsToSkip' <<< "$system_config")
   local global_watch_dir=$(jq -r '.globalWatchDir' "$CONFIG_FILE")
   local watch_dir=$(jq -r '.watchDir // ""' <<< "$system_config")
   
-  # Default watchDir to [globalWatchDir]/[systemName] if not defined
   if [[ -z "$watch_dir" || "$watch_dir" == "null" ]]; then
     watch_dir="${global_watch_dir}/${system_name}"
   fi
 
   local uploaded_dir="${watch_dir}_uploaded"
 
-  #log_message "(info)" "$system_name" "$file_name" "Ready for Upload"
-
-  # Extract metadata from JSON
   local talkgroup=$(jq -r '.talkgroup' "$call_json")
   
   if should_skip_talkgroup "$talkgroup" "$talkgroups_to_skip"; then
     log_message "(info)" "$system_name" "$file_name" "**SKIPPED**"
   else
-    # Use shortName for upload if defined, otherwise use systemName
     local upload_short_name="${short_name:-$system_name}"
     local OPENMHZ_URL="https://api.openmhz.com/$upload_short_name/upload"
     log_message "(info)" "$system_name" "$file_name" "Uploading"
     
-    # Capture the full HTML response from the API
-    response=$(curl -sS -m 10 --write-out "%{http_code}" --output /tmp/api_response.log --request POST \
+    response=$(curl -sS -m 15 --write-out "%{http_code}" --output /tmp/api_response.log --request POST \
       --url "$OPENMHZ_URL" \
       --header 'Content-Type: multipart/form-data' \
       --header 'User-Agent: TrunkRecorder1.0' \
@@ -81,31 +76,24 @@ process_file() {
 
     if [[ "$response" -eq 200 ]]; then
       log_message "(info)" "$system_name" "$file_name" "Success"
-      #log_message "(info)" "$system_name" "$file_name" "API Response: $(cat /tmp/api_response.log)"
     else
       log_message "(error)" "$system_name" "$file_name" "Upload failed with response code: $response"
-      #log_message "(error)" "$system_name" "$file_name" "API Response: $(cat /tmp/api_response.log)"
       return
     fi
   fi
 
-  # Move files to the uploaded directory while maintaining the original folder structure
   local relative_path="${m4a_file#$watch_dir}"
   local destination_path="${uploaded_dir}${relative_path}"
   local destination_dir=$(dirname "$destination_path")
 
   mkdir -p "$destination_dir"
   mv -f "$m4a_file" "$destination_path"
-  #log_message "(info)" "$system_name" "$file_name" "Audio Moved"
   mv -f "$call_json" "${destination_path%.m4a}.json"
-  #log_message "(info)" "$system_name" "$file_name" "JSON Moved"
   rm -f "$call_wav"
-  #log_message "(info)" "$system_name" "$file_name" "WAV Deleted"
 }
 
 # Main loop
 while true; do
-  # Read the configuration file
   systems=$(jq -c '.systems[]' "$CONFIG_FILE")
   
   for system_config in $systems; do
@@ -113,19 +101,22 @@ while true; do
     global_watch_dir=$(jq -r '.globalWatchDir' "$CONFIG_FILE")
     watch_dir=$(jq -r '.watchDir // ""' <<< "$system_config")
     upload_delay=$(jq -r '.uploadDelay' <<< "$system_config")
+    min_file_age=$(jq -r '.minFileAge // 4' <<< "$system_config")
     
-    # Default watchDir to [globalWatchDir]/[systemName] if not defined
     if [[ -z "$watch_dir" || "$watch_dir" == "null" ]]; then
       watch_dir="${global_watch_dir}/${system_name}"
     fi
 
     find "$watch_dir" -type f -name "*.m4a" | sort -t'-' -k2,2n | while read -r m4a_file; do
       start_time=$(basename "$m4a_file" | cut -d'-' -f2 | cut -d'_' -f1)
-      if [ $(( $(date +%s) - start_time )) -gt "$upload_delay" ]; then
+      file_mod_time=$(stat -c %Y "$m4a_file")
+      current_time=$(date +%s)
+
+      if [ $((current_time - file_mod_time)) -ge "$min_file_age" ] && [ $((current_time - start_time)) -gt "$upload_delay" ]; then
         process_file "$m4a_file" "$system_config"
         sleep 1
       fi
     done
   done
-  #sleep 3
+  sleep 1
 done
