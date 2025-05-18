@@ -8,9 +8,11 @@ This was pieced together with existing scripts found on the TrunkRecorder Dicord
 
 ---
 
-## Configuration
+## Installation/Usage
 
 Save the `openmhz_delayed.sh` and `openmhz_delayed_config.json` files. Edit the config file as appropriate for your system(s) and save. Edit the location for your config file in the .sh script to point to your config file. Install `openmhz_delayed.sh` as a service so it's constantly monitoring and you're set! 
+
+Make sure you remove any OpenMhz upload variables from your Trunk-Recorder config file to avoid duplicate uploads. 
 
 ---
 
@@ -26,16 +28,15 @@ The global configuration applies to all systems unless overridden by system-spec
 
 ### System Configuration
 
-Each system configuration can override the global settings. The following keys are available for each system:
 
 | Key               | Type   | Default Value          | Description                                                                 |
 |-------------------|--------|------------------------|-----------------------------------------------------------------------------|
-| `systemName`      | String | -                      | The name of the system. Used to create subdirectories and log entries.      |
-| `shortName`       | String | `systemName`           | A short name for the system, used in the OpenMHz API URL.                   |
-| `openmhzKey`      | String | -                      | The API key used to authenticate with the OpenMHz API.                      |
-| `uploadDelay`     | Number | -                      | The delay (in seconds) before uploading a file after it is created.         |
-| `minFileAge`      | Number | `10`                   | The minimum age (in seconds) a file must be before it can be uploaded.      |
-| `talkgroupsToSkip`| String | -                      | A comma-separated list of talkgroup IDs to skip during upload.              |
+| `systemName`      | String | -                      | The name of the system (matching trunk-recorder). Also acts as the default OpenMhz system name      |
+| `shortName`       | String | `systemName`           | Defaults to systemName. Only required if you have multiple systems you want to upload to one system in OpenMhz               |
+| `openmhzKey`      | String | -                      | OpenMhz API Key                     |
+| `uploadDelay`     | Number | -                      | The delay (in seconds) before uploading a file after it is created. I've tested between 5-15 minutes successfully.       |
+| `minFileAge`      | Number | `10`                   | The minimum age (in seconds) a file must be before it can be uploaded. (recommend 5-10 seconds if you are uploading to broadcastify or rdio within trunk-recorder)    |
+| `talkgroupsToSkip`| String | -                      | A comma-separated list of talkgroup IDs to skip during upload. (Use this for car to car or tactial groups you may want to record, but don't want uploaded.)           |
 | `watchDir`        | String | `globalWatchDir/systemName` | The directory where the script will look for audio files for this system.   |
 
 ---
