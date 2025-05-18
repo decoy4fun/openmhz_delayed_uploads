@@ -67,42 +67,40 @@ Here’s an example `openmhz_delayed_config.json` file:
 }
 ```
 
-###NOT YET FORMATTED
+---
 
-Usage
-Configuration: Edit the openmhz_delayed_config.json file to include your global and system-specific settings.
+## Usage
 
-Running the Script: Execute the script using the following command:
+* **Configuration:** Edit the ``openmhz_delayed_config.json`` file to include your global and system-specific settings.
+* **Running the Script:** Save the script and config somewhere on your machine and install it as a service. 
+* **Monitoring:** The script will continuously monitor the specified directories for new files and upload them to OpenMHz after the specified delay.
 
-bash
+---
 
-bash /path/to/your/script.sh
-Monitoring: The script will continuously monitor the specified directories for new files and upload them to OpenMHz after the specified delay.
+## Logging
 
-Logging
 The script logs its activities to the console with the following format:
 
+```text
+YYYY-MM-DD HH:MM:SS.MS  LEVEL       SYSTEM_NAME         MESSAGE                     FILE_NAME
+```
 
-YYYY-MM-DD HH:MM:SS.MS  LEVEL       SYSTEM_NAME          MESSAGE                FILE_NAME
-LEVEL: The log level (e.g., info, error).
+* **LEVEL**: The log level (e.g., info, error).
 
-SYSTEM_NAME: The name of the system being processed.
+* **SYSTEM_NAME**: The name of the system being processed.
 
-MESSAGE: A descriptive message about the event.
+* **MESSAGE**: A descriptive message about the event.
 
-FILE_NAME: The name of the file being processed.
+* **FILE_NAME**: The name of the file being processed.
 
-Notes
-The script skips uploading files for talkgroups listed in talkgroupsToSkip.
+## Notes
+* The script skips uploading files for talkgroups listed in `talkgroupsToSkip`.
 
-Files are moved to an _uploaded subdirectory after successful upload.
+* Files are moved to an `_uploaded` subdirectory after successful upload.
 
-The script retries uploading files if the initial attempt fails.
+* The script retries uploading files if the initial attempt fails.
 
-Dependencies
-jq: A lightweight and flexible command-line JSON processor.
+## Dependencies
+* jq: A lightweight and flexible command-line JSON processor.
 
-curl: A command-line tool for transferring data with URLs.
-
-License
-This script is released under the MIT License. See the LICENSE file for more details.
+* curl: A command-line tool for transferring data with URLs.
