@@ -10,7 +10,7 @@ This was pieced together with existing scripts found on the TrunkRecorder Dicord
 
 ## Configuration
 
-The script reads its configuration from a JSON file located at `/home/ubuntu/Automations/OpenMhz/openmhz_delayed_config.json`. The configuration file contains global settings and an array of system-specific configurations.
+Save the `openmhz_delayed.sh` and `openmhz_delayed_config.json` files. Edit the config file as appropriate for your system(s) and save. Edit the location for your config file in the .sh script to point to your config file. Install `openmhz_delayed.sh` as a service so it's constantly monitoring and you're set! 
 
 ---
 
@@ -66,32 +66,6 @@ Here’s an example `openmhz_delayed_config.json` file:
   ]
 }
 ```
-
----
-
-## Usage
-
-* **Configuration:** Edit the ``openmhz_delayed_config.json`` file to include your global and system-specific settings.
-* **Running the Script:** Save the script and config somewhere on your machine and install it as a service. 
-* **Monitoring:** The script will continuously monitor the specified directories for new files and upload them to OpenMHz after the specified delay.
-
----
-
-## Logging
-
-The script logs its activities to the console with the following format:
-
-```text
-YYYY-MM-DD HH:MM:SS.MS  LEVEL       SYSTEM_NAME         MESSAGE                     FILE_NAME
-```
-
-* **LEVEL**: The log level (e.g., info, error).
-
-* **SYSTEM_NAME**: The name of the system being processed.
-
-* **MESSAGE**: A descriptive message about the event.
-
-* **FILE_NAME**: The name of the file being processed.
 
 ## Notes
 * The script skips uploading files for talkgroups listed in `talkgroupsToSkip`.
