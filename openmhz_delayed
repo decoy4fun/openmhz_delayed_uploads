@@ -86,7 +86,9 @@ process_file() {
   fi
 
   local uploaded_dir="${watch_dir}_uploaded"
+  local skipped_dir="${watch_dir}_skipped"
   local talkgroup=""
+
   if [[ -f "$call_json" ]]; then
     talkgroup=$(jq -r '.talkgroup' "$call_json")
   else
@@ -96,6 +98,20 @@ process_file() {
 
   if should_skip_talkgroup "$talkgroup" "$talkgroups_to_skip"; then
     log_message "(info)" "$system_name" "$file_name" "**SKIPPED**"
+
+    local relative_path="${m4a_file#$watch_dir}"
+    local destination_path="${skipped_dir}${relative_path}"
+    local destination_dir=$(dirname "$destination_path")
+
+    mkdir -p "$destination_dir"
+    mv -f "$m4a_file" "$destination_path"
+    if [[ -f "$call_json" ]]; then
+      mv -f "$call_json" "${destination_path%.m4a}.json"
+    fi
+    if [[ -f "$call_wav" ]]; then
+      rm -f "$call_wav"
+    fi
+
     return
   fi
 
