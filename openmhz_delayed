@@ -18,46 +18,27 @@ should_skip_talkgroup() {
   local talkgroups_to_skip="$2"
   IFS=',' read -ra SKIP_ARRAY <<< "$talkgroups_to_skip"
   for tg in "${SKIP_ARRAY[@]}"; do
-    if [[ "$talkgroup" == "$tg" ]]; then
-      return 0 # Skip upload
+    if [[ "$tg" == "*" || "$talkgroup" == "$tg" ]]; then
+      return 0
     fi
   done
-  return 1 # Proceed with upload
+  return 1
 }
 
-# Processing function
-process_file() {
+# Attempt an upload with retries
+attempt_upload() {
   local m4a_file="$1"
-  local system_config="$2"
-  local base_name="${m4a_file%.m4a}"
-  local call_json="${base_name}.json"
-  local call_wav="${base_name}.wav"
-  local file_name=$(basename "$m4a_file")
-  local system_name=$(jq -r '.systemName' <<< "$system_config")
-  local short_name=$(jq -r '.shortName // ""' <<< "$system_config")
-  local openmhz_key=$(jq -r '.openmhzKey' <<< "$system_config")
-  local upload_delay=$(jq -r '.uploadDelay' <<< "$system_config")
-  local min_file_age=$(jq -r '.minFileAge // 10' <<< "$system_config")
-  local talkgroups_to_skip=$(jq -r '.talkgroupsToSkip' <<< "$system_config")
-  local global_watch_dir=$(jq -r '.globalWatchDir' "$CONFIG_FILE")
-  local watch_dir=$(jq -r '.watchDir // ""' <<< "$system_config")
-  
-  if [[ -z "$watch_dir" || "$watch_dir" == "null" ]]; then
-    watch_dir="${global_watch_dir}/${system_name}"
-  fi
+  local call_json="$2"
+  local OPENMHZ_URL="$3"
+  local openmhz_key="$4"
+  local talkgroup="$5"
+  local system_name="$6"
+  local file_name="$7"
+  local retries=3
+  local delay=2
 
-  local uploaded_dir="${watch_dir}_uploaded"
-
-  local talkgroup=$(jq -r '.talkgroup' "$call_json")
-  
-  if should_skip_talkgroup "$talkgroup" "$talkgroups_to_skip"; then
-    log_message "(info)" "$system_name" "$file_name" "**SKIPPED**"
-  else
-    local upload_short_name="${short_name:-$system_name}"
-    local OPENMHZ_URL="https://api.openmhz.com/$upload_short_name/upload"
-    log_message "(info)" "$system_name" "$file_name" "Uploading"
-    
-    response=$(curl -sS -m 15 --write-out "%{http_code}" --output /tmp/api_response.log --request POST \
+  for attempt in $(seq 1 $retries); do
+    response=$(curl -sS -m 45 --write-out "%{http_code}" --output /tmp/api_response.log --request POST \
       --url "$OPENMHZ_URL" \
       --header 'Content-Type: multipart/form-data' \
       --header 'User-Agent: TrunkRecorder1.0' \
@@ -75,34 +56,82 @@ process_file() {
     )
 
     if [[ "$response" -eq 200 ]]; then
-      log_message "(info)" "$system_name" "$file_name" "Success"
+      return 0
     else
-      log_message "(error)" "$system_name" "$file_name" "Upload failed with response code: $response"
-      return
+      log_message "(warn)" "$system_name" "$file_name" "Attempt $attempt failed (HTTP $response)"
+      sleep "$delay"
     fi
+  done
+
+  return 1
+}
+
+# Process a single file
+process_file() {
+  local m4a_file="$1"
+  local system_config="$2"
+  local base_name="${m4a_file%.m4a}"
+  local call_json="${base_name}.json"
+  local call_wav="${base_name}.wav"
+  local file_name=$(basename "$m4a_file")
+  local system_name=$(jq -r '.systemName' <<< "$system_config")
+  local short_name=$(jq -r '.shortName // ""' <<< "$system_config")
+  local openmhz_key=$(jq -r '.openmhzKey' <<< "$system_config")
+  local talkgroups_to_skip=$(jq -r '.talkgroupsToSkip' <<< "$system_config")
+  local global_watch_dir=$(jq -r '.globalWatchDir' "$CONFIG_FILE")
+  local watch_dir=$(jq -r '.watchDir // ""' <<< "$system_config")
+
+  if [[ -z "$watch_dir" || "$watch_dir" == "null" ]]; then
+    watch_dir="${global_watch_dir}/${system_name}"
   fi
 
-  local relative_path="${m4a_file#$watch_dir}"
-  local destination_path="${uploaded_dir}${relative_path}"
-  local destination_dir=$(dirname "$destination_path")
+  local uploaded_dir="${watch_dir}_uploaded"
+  local talkgroup=""
+  if [[ -f "$call_json" ]]; then
+    talkgroup=$(jq -r '.talkgroup' "$call_json")
+  else
+    log_message "(warn)" "$system_name" "$file_name" "Missing JSON metadata"
+    return
+  fi
 
-  mkdir -p "$destination_dir"
-  mv -f "$m4a_file" "$destination_path"
-  mv -f "$call_json" "${destination_path%.m4a}.json"
-  rm -f "$call_wav"
+  if should_skip_talkgroup "$talkgroup" "$talkgroups_to_skip"; then
+    log_message "(info)" "$system_name" "$file_name" "**SKIPPED**"
+    return
+  fi
+
+  local upload_short_name="${short_name:-$system_name}"
+  local OPENMHZ_URL="https://api.openmhz.com/$upload_short_name/upload"
+
+  log_message "(info)" "$system_name" "$file_name" "Uploading"
+
+  if attempt_upload "$m4a_file" "$call_json" "$OPENMHZ_URL" "$openmhz_key" "$talkgroup" "$system_name" "$file_name"; then
+    log_message "(info)" "$system_name" "$file_name" "Success"
+
+    local relative_path="${m4a_file#$watch_dir}"
+    local destination_path="${uploaded_dir}${relative_path}"
+    local destination_dir=$(dirname "$destination_path")
+
+    mkdir -p "$destination_dir"
+    mv -f "$m4a_file" "$destination_path"
+    mv -f "$call_json" "${destination_path%.m4a}.json"
+    rm -f "$call_wav"
+  else
+    log_message "(error)" "$system_name" "$file_name" "Upload failed after retries"
+  fi
 }
 
 # Main loop
+global_watch_dir=$(jq -r '.globalWatchDir' "$CONFIG_FILE")
+
 while true; do
   systems=$(jq -c '.systems[]' "$CONFIG_FILE")
-  
+
   for system_config in $systems; do
     system_name=$(jq -r '.systemName' <<< "$system_config")
-    global_watch_dir=$(jq -r '.globalWatchDir' "$CONFIG_FILE")
     watch_dir=$(jq -r '.watchDir // ""' <<< "$system_config")
     upload_delay=$(jq -r '.uploadDelay' <<< "$system_config")
     min_file_age=$(jq -r '.minFileAge // 4' <<< "$system_config")
-    
+
     if [[ -z "$watch_dir" || "$watch_dir" == "null" ]]; then
       watch_dir="${global_watch_dir}/${system_name}"
     fi
@@ -113,10 +142,13 @@ while true; do
       current_time=$(date +%s)
 
       if [ $((current_time - file_mod_time)) -ge "$min_file_age" ] && [ $((current_time - start_time)) -gt "$upload_delay" ]; then
-        process_file "$m4a_file" "$system_config"
-        sleep 1
+        process_file "$m4a_file" "$system_config" &
+        sleep 0.05
       fi
     done
+
+    wait
   done
-  sleep 1
+
+  sleep 2
 done
