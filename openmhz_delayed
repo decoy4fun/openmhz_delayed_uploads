@@ -3,13 +3,17 @@
 # Configuration file path
 CONFIG_FILE="/home/ubuntu/Automations/OpenMhz/openmhz_delayed_config.json"
 
+# Create lock directory root if it doesn't exist
+LOCK_ROOT="/tmp/openmhz_locks"
+mkdir -p "$LOCK_ROOT"
+
 # Logging function
 log_message() {
   local level="$1"
   local system_name="$2"
   local file="$3"
   local message="$4"
-  printf "%-28s %-11s %-20s %-20s %-35s\n" "$(date +'%Y-%m-%d %H:%M:%S.%3N')" "$level" "$system_name" "$message" "$file"
+  printf "%-24s %-8s %-18s %-35s %-s\n" "$(date +'%Y-%m-%d %H:%M:%S.%3N')" "$level" "$system_name" "$message" "$file"
 }
 
 # Check if a talkgroup should be skipped
@@ -118,10 +122,16 @@ process_file() {
   local upload_short_name="${short_name:-$system_name}"
   local OPENMHZ_URL="https://api.openmhz.com/$upload_short_name/upload"
 
-  log_message "(info)" "$system_name" "$file_name" "Uploading"
+# Get file size in kilobytes (rounded)
+file_size_kb=$(du -k "$m4a_file" | cut -f1)
+log_message "(info)" "$system_name" "$file_name" "Uploading ($file_size_kb KB)"
 
-  if attempt_upload "$m4a_file" "$call_json" "$OPENMHZ_URL" "$openmhz_key" "$talkgroup" "$system_name" "$file_name"; then
-    log_message "(info)" "$system_name" "$file_name" "Success"
+upload_start=$(date +%s%3N)
+
+if attempt_upload "$m4a_file" "$call_json" "$OPENMHZ_URL" "$openmhz_key" "$talkgroup" "$system_name" "$file_name"; then
+  upload_end=$(date +%s%3N)
+  upload_duration_ms=$((upload_end - upload_start))
+  log_message "(info)" "$system_name" "$file_name" "Success (${file_size_kb} KB in ${upload_duration_ms} ms)"
 
     local relative_path="${m4a_file#$watch_dir}"
     local destination_path="${uploaded_dir}${relative_path}"
@@ -158,8 +168,17 @@ while true; do
       current_time=$(date +%s)
 
       if [ $((current_time - file_mod_time)) -ge "$min_file_age" ] && [ $((current_time - start_time)) -gt "$upload_delay" ]; then
-        process_file "$m4a_file" "$system_config" &
-        sleep 0.05
+        # Lock directory per file to prevent parallel processing of the same file
+        lock_dir="${LOCK_ROOT}/$(basename "$m4a_file").lock"
+        if mkdir "$lock_dir" 2>/dev/null; then
+          (
+            process_file "$m4a_file" "$system_config"
+            rmdir "$lock_dir"
+          ) &
+          sleep 0.5
+        else
+          log_message "(info)" "$system_name" "$(basename "$m4a_file")" "Skipping - locked by another process"
+        fi
       fi
     done
 
