@@ -20,9 +20,13 @@ Make sure you remove any OpenMhz upload variables from your Trunk-Recorder confi
 
 The global configuration applies to all systems unless overridden by system-specific settings.
 
-| Key               | Type   | Default Value | Description                                                                 |
-|-------------------|--------|---------------|-----------------------------------------------------------------------------|
-| `globalWatchDir`  | String | -             | The base directory where the script will look for audio files.              |
+| Key              | Type   | Default Value | Description                                                                  |
+|------------------|--------|----------------|------------------------------------------------------------------------------|
+| `globalWatchDir` | String | *(required)*   | The base directory where the script will look for audio files.              |
+| `alertLevel`     | String | `error`        | Minimum log level to trigger alerts. Options: `warn`, `error`. `info` would be too spammy and is not enabled. Setting to `warn` will send all warnings and errors. Setting to error will only send errors, not warnings.  |
+| `alertEmail`     | String | *(optional)*   | If enabled, this will send an email for every log entry based on `alertLevel`. Requires `mail` or `msmtp` to be installed.   |
+| `alertWebhook`   | String | *(optional)*   | Discord webhook URL to receive alert messages if enabled. Sends a message for every log entry based on `alertLevel`                          |
+
 
 ---
 
