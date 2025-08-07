@@ -1,5 +1,8 @@
 {
   "globalWatchDir": "/home/ubuntu/Recordings",
+  "alertLevel": "warn",
+  "alertEmail": "youremailhere",
+  "alertWebhook": "yourwebhookhere"
   "systems": [
     {
       "systemName": "cachep25",
