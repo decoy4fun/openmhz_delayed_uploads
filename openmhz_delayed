@@ -7,13 +7,69 @@ CONFIG_FILE="/home/ubuntu/Automations/OpenMhz/openmhz_delayed_config.json"
 LOCK_ROOT="/tmp/openmhz_locks"
 mkdir -p "$LOCK_ROOT"
 
+# Remove any stale lock directories on startup
+if [ -d "$LOCK_ROOT" ]; then
+  rm -rf "$LOCK_ROOT"/*
+fi
+
+# Max parallel uploads limit (set to "*" for unlimited)
+MAX_UPLOADS=10
+
+# Map log levels to numeric values for comparison
+log_level_value() {
+  case "$1" in
+    "(error)") echo 3 ;;
+    "(warn)") echo 2 ;;
+    "(info)") echo 1 ;;
+    *) echo 0 ;;
+  esac
+}
+
+# Send alerts to email and/or Discord if configured
+send_alert() {
+  local timestamp="$1"
+  local level="$2"
+  local system="$3"
+  local file="$4"
+  local msg="$5"
+
+  local alert_msg="[$timestamp] $level | $system | $msg | $file"
+
+  # Discord webhook alert
+  local webhook=$(jq -r '.alertWebhook // empty' "$CONFIG_FILE")
+  if [[ -n "$webhook" ]]; then
+    curl -s -H "Content-Type: application/json" \
+         -X POST -d "{\"content\": \"\`\`\`\n$alert_msg\n\`\`\`\"}" \
+         "$webhook" >/dev/null
+  fi
+
+  # Email alert
+  local email=$(jq -r '.alertEmail // empty' "$CONFIG_FILE")
+  if [[ -n "$email" ]]; then
+    echo "$alert_msg" | mail -s "OpenMHZ Alert [$level]" "$email"
+  fi
+}
+
 # Logging function
 log_message() {
   local level="$1"
   local system_name="$2"
   local file="$3"
   local message="$4"
-  printf "%-24s %-8s %-18s %-35s %-s\n" "$(date +'%Y-%m-%d %H:%M:%S.%3N')" "$level" "$system_name" "$message" "$file"
+  local timestamp="$(date +'%Y-%m-%d %H:%M:%S.%3N')"
+
+  printf "%-24s %-8s %-18s %-35s %-s\n" "$timestamp" "$level" "$system_name" "$message" "$file"
+
+  # Send alerts if config allows
+  local alert_level=$(jq -r '.alertLevel // empty' "$CONFIG_FILE")
+  if [[ -n "$alert_level" ]]; then
+    local level_val=$(log_level_value "$level")
+    local alert_val=$(log_level_value "($alert_level)")
+
+    if (( level_val >= alert_val )); then
+      send_alert "$timestamp" "$level" "$system_name" "$file" "$message"
+    fi
+  fi
 }
 
 # Check if a talkgroup should be skipped
@@ -39,7 +95,7 @@ attempt_upload() {
   local system_name="$6"
   local file_name="$7"
   local retries=3
-  local delay=2
+  local delay=120
 
   for attempt in $(seq 1 $retries); do
     response=$(curl -sS -m 45 --write-out "%{http_code}" --output /tmp/api_response.log --request POST \
@@ -90,7 +146,6 @@ process_file() {
   fi
 
   local uploaded_dir="${watch_dir}_uploaded"
-  local skipped_dir="${watch_dir}_skipped"
   local talkgroup=""
 
   if [[ -f "$call_json" ]]; then
@@ -102,47 +157,43 @@ process_file() {
 
   if should_skip_talkgroup "$talkgroup" "$talkgroups_to_skip"; then
     log_message "(info)" "$system_name" "$file_name" "**SKIPPED**"
-
     local relative_path="${m4a_file#$watch_dir}"
-    local destination_path="${skipped_dir}${relative_path}"
+    local destination_path="${uploaded_dir}${relative_path}"
     local destination_dir=$(dirname "$destination_path")
-
     mkdir -p "$destination_dir"
     mv -f "$m4a_file" "$destination_path"
-    if [[ -f "$call_json" ]]; then
-      mv -f "$call_json" "${destination_path%.m4a}.json"
-    fi
-    if [[ -f "$call_wav" ]]; then
-      rm -f "$call_wav"
-    fi
-
+    [[ -f "$call_json" ]] && mv -f "$call_json" "${destination_path%.m4a}.json"
+    [[ -f "$call_wav" ]] && rm -f "$call_wav"
     return
   fi
 
   local upload_short_name="${short_name:-$system_name}"
   local OPENMHZ_URL="https://api.openmhz.com/$upload_short_name/upload"
 
-# Get file size in kilobytes (rounded)
-file_size_kb=$(du -k "$m4a_file" | cut -f1)
-log_message "(info)" "$system_name" "$file_name" "Uploading ($file_size_kb KB)"
+  file_size_kb=$(du -k "$m4a_file" | cut -f1)
+  log_message "(info)" "$system_name" "$file_name" "Uploading ($file_size_kb KB)"
+  upload_start=$(date +%s%3N)
 
-upload_start=$(date +%s%3N)
-
-if attempt_upload "$m4a_file" "$call_json" "$OPENMHZ_URL" "$openmhz_key" "$talkgroup" "$system_name" "$file_name"; then
-  upload_end=$(date +%s%3N)
-  upload_duration_ms=$((upload_end - upload_start))
-  log_message "(info)" "$system_name" "$file_name" "Success (${file_size_kb} KB in ${upload_duration_ms} ms)"
-
+  if attempt_upload "$m4a_file" "$call_json" "$OPENMHZ_URL" "$openmhz_key" "$talkgroup" "$system_name" "$file_name"; then
+    upload_end=$(date +%s%3N)
+    upload_duration_ms=$((upload_end - upload_start))
+    log_message "(info)" "$system_name" "$file_name" "Success (${file_size_kb} KB in ${upload_duration_ms} ms)"
     local relative_path="${m4a_file#$watch_dir}"
     local destination_path="${uploaded_dir}${relative_path}"
     local destination_dir=$(dirname "$destination_path")
-
     mkdir -p "$destination_dir"
     mv -f "$m4a_file" "$destination_path"
     mv -f "$call_json" "${destination_path%.m4a}.json"
     rm -f "$call_wav"
   else
     log_message "(error)" "$system_name" "$file_name" "Upload failed after retries"
+    local relative_path="${m4a_file#$watch_dir}"
+    local destination_path="${uploaded_dir}${relative_path}"
+    local destination_dir=$(dirname "$destination_path")
+    mkdir -p "$destination_dir"
+    mv -f "$m4a_file" "$destination_path"
+    [[ -f "$call_json" ]] && mv -f "$call_json" "${destination_path%.m4a}.json"
+    rm -f "$call_wav"
   fi
 }
 
@@ -158,9 +209,7 @@ while true; do
     upload_delay=$(jq -r '.uploadDelay' <<< "$system_config")
     min_file_age=$(jq -r '.minFileAge // 4' <<< "$system_config")
 
-    if [[ -z "$watch_dir" || "$watch_dir" == "null" ]]; then
-      watch_dir="${global_watch_dir}/${system_name}"
-    fi
+    [[ -z "$watch_dir" || "$watch_dir" == "null" ]] && watch_dir="${global_watch_dir}/${system_name}"
 
     find "$watch_dir" -type f -name "*.m4a" | sort -t'-' -k2,2n | while read -r m4a_file; do
       start_time=$(basename "$m4a_file" | cut -d'-' -f2 | cut -d'_' -f1)
@@ -168,16 +217,18 @@ while true; do
       current_time=$(date +%s)
 
       if [ $((current_time - file_mod_time)) -ge "$min_file_age" ] && [ $((current_time - start_time)) -gt "$upload_delay" ]; then
-        # Lock directory per file to prevent parallel processing of the same file
+        if [[ "$MAX_UPLOADS" != "*" ]]; then
+          while [ "$(jobs -rp | wc -l)" -ge "$MAX_UPLOADS" ]; do sleep 1; done
+        fi
+
         lock_dir="${LOCK_ROOT}/$(basename "$m4a_file").lock"
         if mkdir "$lock_dir" 2>/dev/null; then
           (
             process_file "$m4a_file" "$system_config"
+            sleep 5
             rmdir "$lock_dir"
           ) &
           sleep 0.5
-        else
-          log_message "(info)" "$system_name" "$(basename "$m4a_file")" "Skipping - locked by another process"
         fi
       fi
     done
@@ -185,5 +236,5 @@ while true; do
     wait
   done
 
-  sleep 2
+  sleep 5
 done
